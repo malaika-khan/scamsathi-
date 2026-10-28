@@ -35,7 +35,10 @@ from sklearn.pipeline import FeatureUnion, Pipeline
 # 1. SETTINGS (verified by inspecting phishing_dataset_1000.xlsx)
 # =============================================================================
 BASE_DIR = Path(__file__).resolve().parent          # relative paths work after deployment
-DATASET_PATH = BASE_DIR / "data" / "phishing_dataset_1000.xlsx"
+DATASET_NAME = "phishing_dataset_1000.xlsx"
+# Looks in data/ first, then the main folder (easy mistake when uploading to GitHub)
+DATASET_CANDIDATES = [BASE_DIR / "data" / DATASET_NAME, BASE_DIR / DATASET_NAME]
+DATASET_PATH = next((p for p in DATASET_CANDIDATES if p.exists()), DATASET_CANDIDATES[0])
 MODEL_PATH = BASE_DIR / "scam_model.joblib"
 
 # Exact column names found in the file: ID, Raw_text, Labels, Source_Type, Normalized_text
@@ -76,8 +79,9 @@ def load_dataset(path=DATASET_PATH):
     """Read the Excel file and stop with a readable error if anything is wrong."""
     if not Path(path).exists():
         raise DatasetError(
-            f"Dataset not found at '{path}'. Download phishing_dataset_1000.xlsx from "
-            "https://zenodo.org/records/21810885 and place it in the data/ folder."
+            f"Dataset file '{DATASET_NAME}' was not found in the data/ folder or the main "
+            "project folder. Download it from https://zenodo.org/records/21810885 and add it "
+            "to your GitHub repository (or the local data/ folder)."
         )
     try:
         df = pd.read_excel(path)
