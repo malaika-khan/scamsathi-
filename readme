@@ -1,0 +1,203 @@
+# 🛡️ ScamSathi — Pause. Check. Stay Safe.
+
+An educational AI + cybersecurity prototype that helps users examine suspicious SMS-style messages.
+It combines **two different kinds of AI**:
+
+| Component | Type | Job |
+|---|---|---|
+| TF-IDF + Logistic Regression (scikit-learn) | Machine learning (trained on labelled data) | **Predicts** *Potentially Suspicious* / *Likely Legitimate* / *Unable to Assess* |
+| Gemini API (`google-genai`) | Generative AI | **Explains** warning signs and safe next steps. It receives the ML result but cannot change it |
+
+> ⚠️ **Educational prototype.** It can be wrong, it cannot verify any sender, and "Likely Legitimate" never means "safe".
+
+---
+
+## 1. Dataset inspection (done on the real file)
+
+Source: *Roman Urdu Phishing SMS Dataset for Smishing Detection Research*, Ghufran Siddiq,
+Zenodo v1.0.0, DOI 10.5281/zenodo.21810885, **CC BY 4.0** (you must credit the author — this README and the app's About section do).
+
+| Check | Verified result |
+|---|---|
+| Sheet | `Phishing_Dataset` (1 sheet, 1000 rows, no missing values) |
+| Exact columns | `ID`, `Raw_text`, `Labels`, `Source_Type`, `Normalized_text` |
+| Labels | `0` = legitimate (595), `1` = phishing (405). Proven by checking that **every** label-1 row has a `Source_Type` starting with "Phishing -" and no label-0 row does |
+| Text columns | `Raw_text` (1000 unique) and `Normalized_text` (909 unique). **Training uses `Raw_text`**, because users paste raw text and the exact normalization recipe is not documented, so it cannot be reproduced at prediction time |
+| `Source_Type` | 16 scenario names. Used only to verify labels. **Never a feature** (it would leak the answer) |
+| Template IDs | ❌ **The uploaded file has no Template ID column**, even though the Zenodo description mentions them. So `GroupShuffleSplit` cannot use official IDs |
+| Substitute | The code builds an **approximate template key**: lowercase, then replace numbers, links and bank/service names with placeholders. This gives 245 groups, with no label conflicts. It is an approximation, not the author's official templates |
+| Language | **All 405 phishing messages are Roman Urdu. The ~200 English-looking messages (OTP, salary alerts) are all legitimate.** There are no English phishing examples and no Urdu-script text |
+| Domain | Pakistani bank / wallet / government-scheme SMS. **No job-offer or recruitment scams** |
+
+### What this means (honest claims)
+- ✅ Supported: **Roman Urdu bank/wallet SMS phishing** detection.
+- ❌ **Not supported: English scams, job/recruitment scams, Urdu script.** A model trained on this file would learn "English ⇒ legitimate", so it would wrongly rate English scams as fine. In a test, English scam messages scored only 0.10–0.28 on the phishing scale.
+- 🛡️ **Guard:** if the input does not look like Roman Urdu, the app returns **Unable to Assess** instead of trusting the model. (A tiny word list does this check. It is *not* part of the ML model.)
+
+---
+
+## 2. Evaluation results (from `python app.py --train`, seed 42)
+
+Template-aware split: 844 train / 156 test, **0 template groups shared** between them.
+
+| | Precision | Recall | F1 | Support |
+|---|---|---|---|---|
+| Legitimate (0) | 1.000 | 1.000 | 1.000 | 67 |
+| Phishing (1) | 1.000 | 1.000 | 1.000 | 89 |
+
+Confusion matrix (rows = actual, columns = predicted): `[[67, 0], [0, 89]]`
+
+**Do not present this as real-world accuracy.** A perfect score on a small, templated dataset mostly means the dataset is easy to separate. Further evidence from the stress test (hold out one whole `Source_Type`, train on the rest):
+
+- 15 of 16 held-out categories were classified correctly.
+- **"Phishing - Wrong Number Refund Scam" (11 messages) scored 0.00**: a scam type the model never saw was missed completely. This is a real false-negative risk for new scam styles.
+
+Class imbalance (59.5% / 40.5%) is mild and handled with `class_weight="balanced"`.
+
+---
+
+## 3. Project files
+
+```
+scamsathi/
+├── app.py            # training (--train) AND the Streamlit app
+├── requirements.txt
+├── README.md
+├── data/
+│   └── phishing_dataset_1000.xlsx      # you download this (step 4.2)
+└── scam_model.joblib                   # created by training (step 4.3)
+```
+You also create three tiny helper files by hand (copy-paste below): `.gitignore`, `packages.txt` (only for OCR on the cloud), and `.streamlit/secrets.toml` (local only, never uploaded).
+
+---
+
+## 4. Local setup (step by step)
+
+1. **Create the folder and a virtual environment**
+   ```bash
+   cd scamsathi
+   python -m venv venv
+   venv\Scripts\activate          # Windows   (Mac/Linux: source venv/bin/activate)
+   pip install -r requirements.txt
+   ```
+2. **Download the dataset** from https://zenodo.org/records/21810885 → `phishing_dataset_1000.xlsx` → put it in `data/`.
+3. **Train the model** (run once; takes seconds):
+   ```bash
+   python app.py --train
+   ```
+   You should see the metrics above and `Saved trained pipeline to: ...scam_model.joblib`. Confirm the file exists. If the dataset is missing or has the wrong columns you get a readable `TRAINING STOPPED:` message.
+4. **Add your Gemini key** — create `.streamlit/secrets.toml`:
+   ```toml
+   GEMINI_API_KEY = "paste-your-key-here"
+   GEMINI_MODEL = "gemini-3.5-flash"
+   ```
+   Get a key at https://aistudio.google.com. **Model IDs change over time.** `gemini-3.5-flash` is the ID shown in Google's current Gemini API quickstart, but if you see "model not found", look up a current ID at https://ai.google.dev/gemini-api/docs/models and change only `GEMINI_MODEL`. No code edit needed.
+5. **Run the app**
+   ```bash
+   streamlit run app.py
+   ```
+6. **OCR (optional locally):** install the Tesseract program (Windows installer from the UCB Mannheim build; Mac `brew install tesseract`; Linux `sudo apt install tesseract-ocr`). On Windows, add its folder to PATH. The sidebar shows whether OCR is available. Without it, the typed-text tab still works fully.
+
+**Without a Gemini key** the app still works: you get the ML result and a clear message that Gemini is not configured.
+
+---
+
+## 5. Deployment (GitHub + Streamlit Community Cloud)
+
+**Create `.gitignore`:**
+```
+.streamlit/secrets.toml
+venv/
+__pycache__/
+*.pyc
+.env
+```
+**Create `packages.txt`** (one line; Streamlit Cloud installs it with apt so OCR works):
+```
+tesseract-ocr
+```
+
+**Upload to GitHub (public or private repo):** `app.py`, `requirements.txt`, `README.md`, `.gitignore`, `packages.txt`, `data/phishing_dataset_1000.xlsx`, `scam_model.joblib` (about 136 KB, no special storage needed).
+**Never upload:** `.streamlit/secrets.toml`, any file containing your API key, `venv/`.
+
+Then:
+1. https://share.streamlit.io → **Create app** → pick your repo, branch `main`, main file `app.py`.
+2. **Advanced settings → Secrets**, paste (this is where the key lives, not in GitHub):
+   ```toml
+   GEMINI_API_KEY = "paste-your-key-here"
+   GEMINI_MODEL = "gemini-3.5-flash"
+   ```
+3. Deploy. Open the sidebar and check all three status lines. Then run the smoke tests below. **Deployment is only "done" once you have tested it on the live URL.**
+
+If the cloud's scikit-learn version differs from yours, the app detects the incompatible `.joblib` and **re-trains once from the dataset** (that's why the xlsx is uploaded too). It never retrains on every visit.
+
+---
+
+## 6. Smoke-test checklist
+
+These are smoke tests, **not** proof of accuracy. The results below are what I actually observed when I ran them (Gemini off). The example buttons in the app contain the same messages.
+
+| # | Message type | Expected / observed category |
+|---|---|---|
+| 1 | Roman Urdu phishing ("Mubarak ho! … inam … pin … bhejain …") | Potentially Suspicious (score 0.98) |
+| 2 | Roman Urdu legitimate (Easypaisa transfer confirmation) | Likely Legitimate (score 0.02) |
+| 3 | English phishing | **Unable to Assess** (outside training data) |
+| 4 | English ordinary message | **Unable to Assess** |
+| 5 | English job-offer scam with a registration fee | **Unable to Assess**, keyword checks flag the fee |
+| 6 | Empty input | Warning, nothing analysed |
+| 7 | No / wrong Gemini key | ML result still shown + clear Gemini message |
+| 8 | Screenshot upload → extract → edit → analyze | Same pipeline as typed text |
+
+**Verified in my environment:** training; the app loading and all categories above through Streamlit's test harness; empty input; missing-model retraining; OCR on a synthetic screenshot plus blank, corrupt, oversized and wrong-type files; the API key not appearing in the UI; every Gemini error branch (success, 403, 404, 429, 503, empty reply, no key) using a **mocked** SDK.
+**Not verified:** a live Gemini call (I had no key), real phone screenshots, and the Streamlit Cloud deployment itself. Test these yourself.
+
+---
+
+## 7. Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `TRAINING STOPPED: Dataset not found` | Put the xlsx at `data/phishing_dataset_1000.xlsx` |
+| Sidebar says "ML model not ready" | Run `python app.py --train` and refresh |
+| "Gemini is not configured" | Add `GEMINI_API_KEY` to secrets (local file or Cloud Secrets), restart the app |
+| "Gemini model … not found" | Change `GEMINI_MODEL` to a current ID from the Gemini models page |
+| "HTTP 403/400" | Key is wrong, revoked, or the API is not enabled for it |
+| "Rate limit (429)" | Wait a minute; free tiers have low limits |
+| "OCR is not available" | Install Tesseract locally, or add `packages.txt` on the cloud and reboot the app |
+| Cloud build fails | Check the log; usually a typo in `requirements.txt` or a missing file |
+| Everything says "Unable to Assess" | Expected for English or non-Roman-Urdu text (see section 1) |
+
+---
+
+## 8. Limitations
+- Trained on **1,000 messages** in few templates from a single source; real scams are far more varied.
+- **Roman Urdu bank/wallet SMS only.** No English, no Urdu script, no job scams.
+- Missed an entire unseen scam type in the stress test (false negatives are likely for new tricks).
+- The approximate template grouping is my reconstruction, not the author's.
+- The model score is not a real-world probability.
+- OCR quality depends on the screenshot; always correct the text.
+- Gemini can make mistakes and cannot verify senders.
+- Keyword checks are simple rules, not ML, and can miss or over-flag.
+
+**Realistic improvements:** add a properly licensed English and job-scam dataset (normalizing labels first), collect more varied Roman Urdu messages, evaluate on messages from a different source, add Urdu-script OCR.
+
+---
+
+## 9. Viva guide (simple answers)
+
+- **What does ScamSathi do?** You paste a message or screenshot. A trained model predicts suspicious/legitimate, and Gemini explains why in plain language.
+- **Why AI + cybersecurity?** Phishing/smishing is a major attack; the tool uses AI to help users spot social-engineering patterns (urgency, prizes, requests for PINs/OTPs).
+- **ML vs generative AI?** ML here *learns from labelled examples to predict a category*. Generative AI *produces new text*. We use ML to decide and Gemini only to explain, so a fluent explanation can't override the prediction.
+- **Why TF-IDF + Logistic Regression?** TF-IDF turns text into numbers by weighting distinctive words (and character pieces, which helps with Roman Urdu's inconsistent spelling like *krne/karne*). Logistic Regression is simple, fast on small data, and gives a score. No GPU or deep learning needed.
+- **Training vs testing?** The model learns from the training set and is graded on messages it hasn't seen. Many messages here come from the same template, so we split by template group to avoid "cheating".
+- **Precision / recall / F1 / confusion matrix?** Precision: of messages flagged suspicious, how many truly were. Recall: of truly suspicious messages, how many we caught. F1: balance of the two. Confusion matrix: a table of correct and wrong predictions per class.
+- **Why 100%? Is it great?** No. The data is templated and easy; it says little about real messages. The stress test shows it missed an unseen scam type.
+- **Roman Urdu support?** Trained on Roman Urdu messages, evaluated on held-out templates. English is *not* supported, and the app says so ("Unable to Assess").
+- **How does OCR work?** Tesseract finds letter shapes in the image and outputs text. It can make mistakes, so the user edits before analysis. No image classifier is used.
+- **What does Gemini contribute?** Readable warning signs, safe next steps, and a Roman Urdu summary, with instructions not to contradict the ML result or invent evidence.
+- **False positives / negatives?** False positive: a real message flagged suspicious (annoying). False negative: a scam passed as fine (dangerous). That's why "Likely Legitimate" is never called "safe" and uncertain cases become "Unable to Assess".
+
+---
+
+## 10. Credits
+Dataset: Siddiq, G., *Roman Urdu Phishing SMS Dataset for Smishing Detection Research*, Zenodo, v1.0.0, doi:10.5281/zenodo.21810885, CC BY 4.0.
